@@ -11,6 +11,18 @@ from pathlib import Path
 import numpy as np
 
 
+class LeRobotNotInstalledError(RuntimeError):
+    """Raised when lerobot is not available for running evaluations."""
+
+    def __init__(self):
+        super().__init__(
+            "lerobot is not installed. Install it with:\n"
+            "  pip install lerobot\n\n"
+            "Alternatively, use 'lerobot-bench analyze' to compare existing eval_info.json files "
+            "without needing lerobot installed."
+        )
+
+
 @dataclass
 class PolicyResult:
     name: str
@@ -32,8 +44,22 @@ class ComparisonResult:
     seeds: list = field(default_factory=list)
 
 
-def _run_lerobot_eval(policy_path, env_config, task, n_episodes, seed, device, batch_size, output_dir):
+def _check_lerobot_available():
+    """Check if lerobot is importable, raise helpful error if not."""
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec("lerobot")
+        if spec is None:
+            raise LeRobotNotInstalledError()
+    except ModuleNotFoundError:
+        raise LeRobotNotInstalledError()
+
+
+def _run_lerobot_eval(policy_path, env_config, task, n_episodes, seed, device, batch_size, output_dir,
+                      timeout=3600):
     """Run a single lerobot-eval invocation and return parsed results."""
+    _check_lerobot_available()
+
     cmd = [
         sys.executable, "-m", "lerobot.scripts.eval",
         f"--policy.path={policy_path}",
@@ -50,7 +76,11 @@ def _run_lerobot_eval(policy_path, env_config, task, n_episodes, seed, device, b
         cmd.append(f"--device={device}")
 
     t0 = time.time()
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        eval_time = time.time() - t0
+        return None, eval_time, f"Evaluation timed out after {timeout}s"
     eval_time = time.time() - t0
 
     if result.returncode != 0:
@@ -64,9 +94,12 @@ def _run_lerobot_eval(policy_path, env_config, task, n_episodes, seed, device, b
         ]
         if env_config:
             cmd_alt.append(f"--env.type={env_config}")
-        result = subprocess.run(cmd_alt, capture_output=True, text=True, timeout=3600)
+        try:
+            result = subprocess.run(cmd_alt, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None, eval_time, f"Evaluation timed out after {timeout}s"
         if result.returncode != 0:
-            return None, eval_time, result.stderr[-500:]
+            return None, eval_time, result.stderr[-500:] if result.stderr else "Unknown error"
 
     # Parse eval_info.json
     eval_info_path = os.path.join(output_dir, "eval_info.json")
@@ -78,8 +111,12 @@ def _run_lerobot_eval(policy_path, env_config, task, n_episodes, seed, device, b
                 break
 
     if os.path.exists(eval_info_path):
-        with open(eval_info_path) as f:
-            return json.load(f), eval_time, None
+        try:
+            with open(eval_info_path) as f:
+                data = json.load(f)
+            return data, eval_time, None
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            return None, eval_time, f"Failed to parse eval_info.json: {e}"
     return None, eval_time, "eval_info.json not found"
 
 
@@ -87,13 +124,22 @@ def _parse_eval_info(eval_info):
     """Extract metrics from lerobot eval_info.json format."""
     metrics = {}
 
-    if "aggregated" in eval_info:
+    if "overall" in eval_info:
+        # Multi-task lerobot format
+        overall = eval_info["overall"]
+        pc = overall.get("pc_success", 0.0)
+        metrics["success_rate"] = pc / 100.0 if pc > 1.0 else pc
+        metrics["avg_reward"] = overall.get("avg_sum_reward", 0.0)
+        metrics["eval_s"] = overall.get("eval_s", 0.0)
+    elif "aggregated" in eval_info:
         agg = eval_info["aggregated"]
-        metrics["success_rate"] = agg.get("pc_success", agg.get("avg_max_reward", 0.0))
+        pc = agg.get("pc_success", agg.get("avg_max_reward", 0.0))
+        metrics["success_rate"] = pc / 100.0 if pc > 1.0 else pc
         metrics["avg_reward"] = agg.get("avg_sum_reward", 0.0)
         metrics["eval_s"] = agg.get("eval_s", 0.0)
     elif "pc_success" in eval_info:
-        metrics["success_rate"] = eval_info["pc_success"]
+        pc = eval_info["pc_success"]
+        metrics["success_rate"] = pc / 100.0 if pc > 1.0 else pc
         metrics["avg_reward"] = eval_info.get("avg_sum_reward", 0.0)
         metrics["eval_s"] = eval_info.get("eval_s", 0.0)
 
@@ -118,12 +164,17 @@ def _parse_eval_info(eval_info):
     return metrics
 
 
-def run_comparison(policy_paths, env_config, task, n_episodes, seeds, device="cuda", batch_size=1):
+def run_comparison(policy_paths, env_config, task, n_episodes, seeds, device="cuda", batch_size=1,
+                   timeout=3600):
     """Run comparison across multiple policies and seeds."""
     from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
     from rich.console import Console
 
     console = Console()
+
+    # Fail fast if lerobot isn't available
+    _check_lerobot_available()
+
     results = []
 
     total_runs = len(policy_paths) * len(seeds)
@@ -148,7 +199,8 @@ def run_comparison(policy_paths, env_config, task, n_episodes, seeds, device="cu
                 os.makedirs(output_dir, exist_ok=True)
 
                 eval_info, eval_time, error = _run_lerobot_eval(
-                    policy_path, env_config, task, n_episodes, seed, device, batch_size, output_dir
+                    policy_path, env_config, task, n_episodes, seed, device, batch_size, output_dir,
+                    timeout=timeout,
                 )
 
                 if eval_info is None:
