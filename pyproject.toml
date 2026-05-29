@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lerobot-bench"
+version = "0.1.0"
+description = "Compare robot learning policies with statistical rigor. A/B testing for lerobot."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Jash Shah", email = "jashshah999@gmail.com"},
+]
+keywords = ["robotics", "benchmark", "lerobot", "policy-comparison", "imitation-learning"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "rich>=13.0",
+    "click>=8.0",
+    "pandas>=2.0",
+]
+
+[project.optional-dependencies]
+lerobot = ["lerobot"]
+wandb = ["wandb>=0.16"]
+dev = ["pytest>=7.0", "ruff>=0.1"]
+
+[project.scripts]
+lerobot-bench = "lerobot_bench.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/jashshah999/lerobot-bench"
+Issues = "https://github.com/jashshah999/lerobot-bench/issues"
+
+[tool.setuptools.packages.find]
+include = ["lerobot_bench*"]
+
+[tool.ruff]
+line-length = 100
