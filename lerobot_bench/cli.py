@@ -161,5 +161,61 @@ def regression(baseline, candidate, threshold, env, task, n_episodes):
         sys.exit(0)
 
 
+@main.command()
+@click.argument("policies", nargs=-1, required=True)
+@click.option("--device", type=str, default="cuda", help="Device for inference")
+@click.option("--n-steps", type=int, default=100, help="Number of inference steps to profile")
+@click.option("--format", "fmt", type=click.Choice(["table", "markdown"]), default="table")
+def profile(policies, device, n_steps, fmt):
+    """Profile inference time and VRAM usage for policies.
+
+    \b
+    Examples:
+        lerobot-bench profile user/policy_a user/policy_b
+        lerobot-bench profile ./checkpoint_10k ./checkpoint_50k --device cuda
+    """
+    from lerobot_bench.profiler import profile_policy
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
+
+    if fmt == "table":
+        table = Table(title="Policy Profiling")
+        table.add_column("Policy", style="cyan")
+        table.add_column("Params (M)", justify="right")
+        table.add_column("Inference (ms)", justify="right", style="green")
+        table.add_column("p95 (ms)", justify="right")
+        table.add_column("VRAM Peak (MB)", justify="right", style="yellow")
+
+    rows = []
+    for policy_path in policies:
+        name = os.path.basename(policy_path) or policy_path.split("/")[-1]
+        metrics, error = profile_policy(policy_path, device=device, n_steps=n_steps)
+        if metrics is None:
+            console.print(f"[red]FAILED: {name}: {error}[/red]")
+            continue
+
+        row = {
+            "policy": name,
+            "params_m": f"{metrics.model_params_m:.1f}",
+            "inference_ms": f"{metrics.inference_ms_mean:.1f} ± {metrics.inference_ms_std:.1f}",
+            "p95_ms": f"{metrics.inference_ms_p95:.1f}",
+            "vram_mb": f"{metrics.vram_peak_mb:.0f}",
+        }
+        rows.append(row)
+
+        if fmt == "table":
+            table.add_row(name, row["params_m"], row["inference_ms"], row["p95_ms"], row["vram_mb"])
+
+    if fmt == "table" and rows:
+        console.print(table)
+    elif fmt == "markdown":
+        print("| Policy | Params (M) | Inference (ms) | p95 (ms) | VRAM Peak (MB) |")
+        print("|--------|-----------|----------------|----------|----------------|")
+        for r in rows:
+            print(f"| {r['policy']} | {r['params_m']} | {r['inference_ms']} | {r['p95_ms']} | {r['vram_mb']} |")
+
+
 if __name__ == "__main__":
     main()

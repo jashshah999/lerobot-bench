@@ -78,6 +78,23 @@ Find the best checkpoint along a training run:
 lerobot-bench sweep ./outputs/train --checkpoints 'step_*' --env pusht --n-episodes 20
 ```
 
+### Profile inference speed and VRAM
+
+```bash
+lerobot-bench profile user/policy_a user/policy_b --device cuda
+```
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│                      Policy Profiling                           │
+├────────────┬───────────┬────────────────┬──────────┬──────────┤
+│ Policy     │ Params (M)│ Inference (ms) │ p95 (ms) │ VRAM (MB)│
+├────────────┼───────────┼────────────────┼──────────┼──────────┤
+│ policy_a   │ 125.3     │ 12.4 ± 1.2    │ 14.8     │ 2,048    │
+│ policy_b   │ 42.1      │ 4.1 ± 0.3     │ 4.7      │ 892      │
+└────────────┴───────────┴────────────────┴──────────┴──────────┘
+```
+
 ### Regression detection (for CI)
 
 Returns exit code 1 if the candidate is worse than baseline:
